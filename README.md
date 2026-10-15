@@ -6,9 +6,9 @@
 
 ## 直接使用
 
-Windows：双击 `md-to-word.exe`，选择 Markdown 文件，确认保存位置，点击“转换为 Word”。也可以把一个 Markdown 文件拖进窗口。完成后点击“打开 Word 文件”。
+Windows：从 [v0.2.0 发布页](https://github.com/zhangning-accp/md-to-word/releases/tag/v0.2.0) 下载 Windows 压缩包，解压后双击 `md-to-word.exe`。选择 Markdown 文件，确认保存位置，点击“转换为 Word”。也可以把一个 Markdown 文件拖进窗口。完成后点击“打开 Word 文件”。
 
-macOS：可以在 GitHub 仓库的 Actions 页面手动运行 **Build desktop apps**，下载 Apple 芯片或 Intel 芯片对应的构建产物，解压后双击 `.app` 使用。也可以在 Mac 上使用下方脚本自行生成。Apple 芯片要求 macOS 11.0 或更新，Intel 芯片要求 macOS 10.14 或更新。
+macOS：从同一[发布页](https://github.com/zhangning-accp/md-to-word/releases/tag/v0.2.0)下载 Apple 芯片或 Intel 芯片对应的压缩包，解压后双击 `墨转 Word.app`。也可以在 Mac 上使用下方脚本自行生成。Apple 芯片要求 macOS 11.0 或更新，Intel 芯片要求 macOS 10.14 或更新。
 
 转换器不需要安装 Word、Pandoc、Python、Node.js 或浏览器运行环境。查看或编辑生成的文件需要兼容 `.docx` 的软件。
 
@@ -62,7 +62,7 @@ rustup target add x86_64-apple-darwin
 sh scripts/package-macos.sh x86_64-apple-darwin
 ```
 
-输出在 `dist/`。GitHub Actions 工作流只在手动启动时运行，默认构建两种 Mac 版本；选择 `all` 时也构建 Windows 版本。每个 Mac 作业会在对应架构的 Mac 机器上运行测试、打包应用，并用打包后的程序转换示例文件。构建产物保留 7 天，可从该次 Actions 运行页面下载。
+输出在 `dist/`。GitHub Actions 工作流只在手动启动时运行，默认构建两种 Mac 版本；选择 `all` 时也构建 Windows 版本。每个 Mac 作业会在对应架构的 Mac 机器上运行测试、打包应用，并用打包后的程序转换示例文件。Actions 中的临时构建产物保留 7 天，正式下载包放在发布页。
 
 脚本使用本地临时签名，没有 Apple Developer ID 签名与公证；在普通 Mac 上首次打开时可能出现系统安全提示。当前尚未在 Mac 桌面上手动验证窗口操作；正式对外分发前仍需完成桌面实测与 Apple 签名公证。
 
