@@ -1,0 +1,109 @@
+name: Build desktop apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to build
+        type: choice
+        required: true
+        default: macos
+        options:
+          - macos
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: apple-silicon
+            cpu: arm64
+            deployment: '11.0'
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: intel
+            cpu: x86_64
+            deployment: '10.14'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.86.0'
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: sh scripts/package-macos.sh ${{ matrix.target }}
+      - name: Verify packaged app and convert examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="dist/${{ matrix.target }}/墨转 Word.app"
+          binary="$app/Contents/MacOS/md-to-word"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          actual_arch="$(lipo -archs "$binary")"
+          test "$actual_arch" = "${{ matrix.cpu }}"
+          mkdir -p qa-output
+          "$binary" --convert examples/数学示例.md qa-output/math.docx
+          "$binary" --convert examples/换行示例.md qa-output/line-breaks.docx
+          unzip -t qa-output/math.docx
+          unzip -t qa-output/line-breaks.docx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: md-to-word-macos-${{ matrix.arch }}
+          path: dist/md-to-word-${{ matrix.target }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    if: inputs.platform == 'all'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.86.0'
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build and validate Windows app
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/md-to-word.exe dist/
+          Copy-Item README.md dist/
+          Copy-Item -Recurse examples dist/
+          New-Item -ItemType Directory -Force qa-output | Out-Null
+          & target/release/md-to-word.exe --convert examples/数学示例.md qa-output/sample.docx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/validate-docx.ps1 -Document qa-output/sample.docx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: md-to-word-windows
+          path: |
+            dist/*.exe
+            dist/README.md
+            dist/examples/
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,10 @@
+/target/
+/target-delivery/
+/dist/
+/qa-output/
+*.tmp
+.env
+.env.*
+*.pem
+*.p12
+.DS_Store
