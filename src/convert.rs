@@ -60,18 +60,8 @@ pub fn convert(input: &Path, output: &Path, overwrite: bool) -> Result<Report> {
     if !input.is_file() {
         return Err("请选择存在的 Markdown 文件".into());
     }
-    if output
-        .extension()
-        .and_then(|s| s.to_str())
-        .is_none_or(|s| !s.eq_ignore_ascii_case("docx"))
-    {
-        return Err("输出文件必须使用 .docx 扩展名".into());
-    }
     if input.canonicalize().ok() == output.canonicalize().ok() && output.exists() {
         return Err("输入和输出不能是同一个文件".into());
-    }
-    if output.exists() && !overwrite {
-        return Err("输出文件已存在，请换一个名称，或使用 --force".into());
     }
     let file = File::open(input).map_err(|e| format!("无法读取源文件：{e}"))?;
     let mut source = String::new();
@@ -81,7 +71,48 @@ pub fn convert(input: &Path, output: &Path, overwrite: bool) -> Result<Report> {
     if source.len() as u64 > MAX_MARKDOWN {
         return Err("Markdown 超过 32 MiB，请拆分后转换，以控制内存占用".into());
     }
-    let source = source.strip_prefix('\u{feff}').unwrap_or(&source);
+    convert_source(
+        &source,
+        input.parent().unwrap_or(Path::new(".")),
+        output,
+        overwrite,
+        began,
+    )
+}
+
+/// Convert Markdown already present in memory, resolving relative images beside the output.
+pub fn convert_text(source: &str, output: &Path, overwrite: bool) -> Result<Report> {
+    if source.trim().is_empty() {
+        return Err("请先粘贴或输入 Markdown 内容".into());
+    }
+    let base = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    convert_source(source, base, output, overwrite, Instant::now())
+}
+
+fn convert_source(
+    source: &str,
+    base: &Path,
+    output: &Path,
+    overwrite: bool,
+    began: Instant,
+) -> Result<Report> {
+    if source.len() as u64 > MAX_MARKDOWN {
+        return Err("Markdown 超过 32 MiB，请拆分后转换，以控制内存占用".into());
+    }
+    if output
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_none_or(|s| !s.eq_ignore_ascii_case("docx"))
+    {
+        return Err("输出文件必须使用 .docx 扩展名".into());
+    }
+    if output.exists() && !overwrite {
+        return Err("输出文件已存在，请换一个名称，或使用 --force".into());
+    }
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let normalized = normalize_math_delimiters(source);
     let parent = output
         .parent()
@@ -97,7 +128,7 @@ pub fn convert(input: &Path, output: &Path, overwrite: bool) -> Result<Report> {
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"{W_NS}\" xmlns:m=\"{M_NS}\" xmlns:r=\"{REL_NS}\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><w:body>"
         ),
     )?;
-    let mut doc = Document::new(&mut zip, input.parent().unwrap_or(Path::new(".")));
+    let mut doc = Document::new(&mut zip, base);
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS

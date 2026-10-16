@@ -15,18 +15,23 @@ use objc2_foundation::{
 use std::{
     cell::RefCell,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, TryRecvError},
+    },
 };
 
 struct State {
     _window: Retained<NSWindow>,
     input: Option<PathBuf>,
+    pasted: Option<Arc<str>>,
     output: Option<PathBuf>,
     input_label: Retained<NSTextField>,
     input_name: Retained<NSTextField>,
     output_label: Retained<NSTextField>,
     status: Retained<NSTextField>,
     choose: Retained<NSButton>,
+    paste: Retained<NSButton>,
     save: Retained<NSButton>,
     convert: Retained<NSButton>,
     open: Retained<NSButton>,
@@ -37,6 +42,7 @@ impl State {
     unsafe fn selected(&mut self, path: PathBuf) {
         self.output = Some(path.with_extension("docx"));
         self.input = Some(path);
+        self.pasted = None;
         self.input_name.setStringValue(&NSString::from_str(
             &self
                 .input
@@ -59,8 +65,10 @@ impl State {
     }
     unsafe fn busy(&self, busy: bool) {
         self.choose.setEnabled(!busy);
+        self.paste.setEnabled(!busy);
         self.save.setEnabled(!busy);
-        self.convert.setEnabled(!busy && self.input.is_some());
+        self.convert
+            .setEnabled(!busy && (self.input.is_some() || self.pasted.is_some()));
         self.convert.setTitle(if busy {
             ns_string!("正在生成…")
         } else {
@@ -118,6 +126,45 @@ define_class!(
                 }
             }
         }}
+        #[unsafe(method(paste:))]
+        fn paste(&self,_sender:&AnyObject) { unsafe {
+            if self.ivars().state.borrow().as_ref().is_some_and(|s|s.worker.is_some()) {return;}
+            let previous=self.ivars().state.borrow().as_ref().and_then(|s|s.pasted.clone());
+            let alert=NSAlert::new(self.mtm());
+            alert.setMessageText(ns_string!("粘贴 Markdown 文字"));
+            alert.setInformativeText(ns_string!("支持多行正文、表格和数学公式。"));
+            let scroll=NSScrollView::initWithFrame(NSScrollView::alloc(self.mtm()), NSRect::new(NSPoint::new(0.0,0.0),NSSize::new(600.0,240.0)));
+            scroll.setBorderType(NSBorderType::BezelBorder);
+            scroll.setHasVerticalScroller(true);
+            let editor=NSTextView::initWithFrame(NSTextView::alloc(self.mtm()), NSRect::new(NSPoint::new(0.0,0.0),NSSize::new(580.0,240.0)));
+            editor.setRichText(false);
+            editor.setAutomaticQuoteSubstitutionEnabled(false);
+            editor.setFont(Some(&NSFont::systemFontOfSize(14.0)));
+            editor.setVerticallyResizable(true);
+            if let Some(text)=previous {editor.setString(&NSString::from_str(&text));}
+            scroll.setDocumentView(Some(&editor));
+            alert.setAccessoryView(Some(&scroll));
+            alert.addButtonWithTitle(ns_string!("取消"));
+            alert.addButtonWithTitle(ns_string!("使用文字"));
+            if alert.runModal()!=NSAlertSecondButtonReturn {return;}
+            let text=editor.string().to_string();
+            if text.trim().is_empty() {
+                if let Some(s)=self.ivars().state.borrow_mut().as_mut() {s.status.setStringValue(ns_string!("请先粘贴或输入 Markdown 内容。"));}
+                return;
+            }
+            if text.len()>32*1024*1024 {
+                if let Some(s)=self.ivars().state.borrow_mut().as_mut() {s.status.setStringValue(ns_string!("文字超过 32 MiB，请拆分后转换。"));}
+                return;
+            }
+            if let Some(s)=self.ivars().state.borrow_mut().as_mut() {
+                s.input=None;s.pasted=Some(Arc::from(text));s.output=None;
+                s.input_name.setStringValue(ns_string!("已粘贴 Markdown 文字"));
+                s.input_label.setStringValue(ns_string!("再次点击“粘贴文字”可修改内容。"));
+                s.output_label.setStringValue(ns_string!("生成时选择 Word 保存位置"));
+                s.status.setStringValue(ns_string!("准备就绪\n粘贴的文字将直接生成 Word 文档。"));
+                s.convert.setEnabled(true);s.open.setEnabled(false);
+            }
+        }}
         #[unsafe(method(save:))]
         fn save(&self,_sender:&AnyObject) {unsafe {
             if self.ivars().state.borrow().as_ref().is_some_and(|s|s.worker.is_some()) {return;}
@@ -126,6 +173,7 @@ define_class!(
             #[allow(deprecated)]
             panel.setAllowedFileTypes(Some(&NSArray::from_slice(&[ns_string!("docx")])));
             panel.setCanCreateDirectories(true);
+            if output.is_none() {panel.setNameFieldStringValue(ns_string!("未命名文档.docx"));}
             if let Some(p)=output {
                 panel.setNameFieldStringValue(&NSString::from_str(&p.file_name().unwrap_or_default().to_string_lossy()));
                 if let Some(parent)=p.parent() {panel.setDirectoryURL(Some(&NSURL::fileURLWithPath(&NSString::from_str(&parent.display().to_string()))));}
@@ -140,9 +188,13 @@ define_class!(
         }}
         #[unsafe(method(convert:))]
         fn convert(&self,_sender:&AnyObject) {unsafe {
-            let paths=self.ivars().state.borrow().as_ref().filter(|s|s.worker.is_none()).and_then(|s|Some((s.input.clone()?,s.output.clone()?)));
-            let Some((input,output))=paths else{return;};
-            if output.exists() {
+            let source=self.ivars().state.borrow().as_ref().filter(|s|s.worker.is_none()).map(|s|(s.input.clone(),s.pasted.clone()));
+            let Some((input,pasted))=source else{return;};
+            if input.is_none() && pasted.is_none() {return;}
+            let needs_save=self.ivars().state.borrow().as_ref().is_some_and(|s|s.output.is_none());
+            if needs_save {self.save(sel!(save:),_sender);}
+            let Some(output)=self.ivars().state.borrow().as_ref().and_then(|s|s.output.clone()) else{return;};
+            if output.exists() && !needs_save {
                 let alert=NSAlert::new(self.mtm());alert.setMessageText(ns_string!("替换已有的 Word 文件？"));
                 alert.setInformativeText(&NSString::from_str(&output.display().to_string()));
                 alert.addButtonWithTitle(ns_string!("取消"));alert.addButtonWithTitle(ns_string!("替换"));
@@ -154,7 +206,11 @@ define_class!(
                 s.status.setStringValue(ns_string!("正在转换…\n公式、表格和图片会自动写入 Word。"));
                 s.timer=Some(NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(0.15,self,sel!(tick:),None,true));
             }
-            std::thread::spawn(move ||{let _=tx.send(convert::convert(&input,&output,true));});
+            std::thread::spawn(move ||{
+                let result=if let Some(text)=pasted {convert::convert_text(&text,&output,true)}
+                    else {convert::convert(&input.unwrap(),&output,true)};
+                let _=tx.send(result);
+            });
         }}
         #[unsafe(method(tick:))]
         fn tick(&self,_timer:&NSTimer) {unsafe {
@@ -279,7 +335,7 @@ pub fn run(initial: Option<PathBuf>) {
             false,
         );
         window.setReleasedWhenClosed(false);
-        window.setTitle(ns_string!("墨转 Word · 0.2"));
+        window.setTitle(ns_string!("墨转 Word · v3"));
         window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
         let view = window.contentView().expect("window content view");
         for (y, h) in [(142.0, 150.0), (308.0, 112.0), (534.0, 96.0)] {
@@ -297,7 +353,7 @@ pub fn run(initial: Option<PathBuf>) {
             false,
             mtm,
         );
-        top_label(&view, "0.2", 665.0, 45.0, 60.0, 24.0, 13.0, false, mtm);
+        top_label(&view, "v3", 665.0, 45.0, 60.0, 24.0, 13.0, false, mtm);
         top_label(
             &view,
             "01   Markdown 文件",
@@ -335,9 +391,19 @@ pub fn run(initial: Option<PathBuf>) {
             &view,
             "选择文件",
             546.0,
-            660.0 - 219.0 - 42.0,
+            660.0 - 190.0 - 40.0,
             162.0,
             sel!(choose:),
+            &controller,
+            mtm,
+        );
+        let paste = button(
+            &view,
+            "粘贴文字",
+            546.0,
+            660.0 - 243.0 - 40.0,
+            162.0,
+            sel!(paste:),
             &controller,
             mtm,
         );
@@ -422,12 +488,14 @@ pub fn run(initial: Option<PathBuf>) {
         let mut state = State {
             _window: window.clone(),
             input: None,
+            pasted: None,
             output: None,
             input_label,
             input_name,
             output_label,
             status,
             choose,
+            paste,
             save,
             convert,
             open,

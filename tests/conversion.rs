@@ -1,4 +1,4 @@
-use md_to_word::convert::convert;
+use md_to_word::convert::{convert, convert_text};
 use std::{fs, io::Read};
 
 fn part(path: &std::path::Path, name: &str) -> String {
@@ -214,4 +214,21 @@ fn line_breaks_do_not_change_paragraph_lists_or_code_structure() {
     let document = part(&path, "word/document.xml");
     assert_eq!(document.matches("<w:numPr>").count(), 1);
     assert_eq!(document.matches("<w:br/>").count(), 4);
+}
+
+#[test]
+fn pasted_markdown_keeps_line_breaks_math_and_relative_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("粘贴文字.docx");
+    let source =
+        "**教材版本**：北师大版\r\n**满分**：150 分\r\n\r\n公式：$x^2+1$\r\n![图](missing.png)";
+    let report = convert_text(source, &output, false).unwrap();
+    assert_eq!(report.equations, 1);
+    assert_eq!(report.warning_count, 1);
+    let document = part(&output, "word/document.xml");
+    assert!(document.contains("<w:br/>"));
+    assert!(document.contains("<m:oMath>"));
+    assert!(document.contains("![图](missing.png)"));
+    assert!(convert_text("   \n", &dir.path().join("empty.docx"), false).is_err());
+    assert!(convert_text(source, &output, false).is_err());
 }

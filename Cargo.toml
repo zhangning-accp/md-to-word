@@ -1,6 +1,6 @@
 [package]
 name = "md-to-word"
-version = "0.2.1"
+version = "3.0.0"
 edition = "2024"
 rust-version = "1.86"
 description = "低内存 Markdown 转 Word 桌面工具，支持可编辑数学公式"
@@ -24,7 +24,7 @@ windows-sys = { version = "=0.60.2", features = ["Win32_Foundation", "Win32_Grap
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.2"
 objc2-foundation = { version = "=0.3.1", default-features = false, features = ["std", "NSArray", "NSString", "NSObject", "NSNotification", "NSURL", "NSTimer", "NSRunLoop"] }
-objc2-app-kit = { version = "=0.3.1", default-features = false, features = ["std", "objc2-core-foundation", "NSGraphics", "NSRunningApplication", "NSButtonCell", "NSApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSButton", "NSCell", "NSColor", "NSFont", "NSTextField", "NSText", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSMenu", "NSMenuItem", "NSWorkspace", "NSAlert", "NSBox"] }
+objc2-app-kit = { version = "=0.3.1", default-features = false, features = ["std", "objc2-core-foundation", "NSGraphics", "NSRunningApplication", "NSButtonCell", "NSApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSButton", "NSCell", "NSColor", "NSFont", "NSTextField", "NSText", "NSTextView", "NSScrollView", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSMenu", "NSMenuItem", "NSWorkspace", "NSAlert", "NSBox"] }
 
 [profile.release]
 opt-level = "s"

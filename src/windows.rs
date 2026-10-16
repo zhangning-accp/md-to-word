@@ -16,7 +16,7 @@ use windows_sys::Win32::{
         SystemServices::{SS_ENDELLIPSIS, SS_RIGHT},
     },
     UI::{
-        Controls::{DRAWITEMSTRUCT, Dialogs::*, ShowScrollBar, WM_MOUSELEAVE},
+        Controls::{DRAWITEMSTRUCT, Dialogs::*, EM_SETLIMITTEXT, ShowScrollBar, WM_MOUSELEAVE},
         HiDpi::*,
         Input::KeyboardAndMouse::*,
         Shell::*,
@@ -29,7 +29,19 @@ const SELECT: usize = 101;
 const SAVE: usize = 102;
 const CONVERT: usize = 103;
 const OPEN: usize = 104;
+const FILE_TAB: usize = 105;
+const TEXT_TAB: usize = 106;
+const TEXT_INPUT: usize = 107;
 const FINISHED: u32 = WM_APP + 1;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    File,
+    Text,
+}
+enum Source {
+    File(PathBuf),
+    Text(String),
+}
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -39,14 +51,19 @@ fn path_wide(p: &std::path::Path) -> Vec<u16> {
 }
 
 struct App {
+    mode: InputMode,
     input: Option<PathBuf>,
     output: Option<PathBuf>,
     input_label: HWND,
     input_name: HWND,
+    file_hint: HWND,
+    text_input: HWND,
     output_label: HWND,
     status_title: HWND,
     status: HWND,
     select: HWND,
+    file_tab: HWND,
+    text_tab: HWND,
     save: HWND,
     convert: HWND,
     open: HWND,
@@ -62,7 +79,18 @@ struct App {
     worker: Option<Receiver<convert::Result<convert::Report>>>,
 }
 impl App {
+    unsafe fn pasted_text(&self) -> convert::Result<String> {
+        let length = GetWindowTextLengthW(self.text_input);
+        if length <= 0 {
+            return Err("请先粘贴或输入 Markdown 内容".into());
+        }
+        let mut buffer = vec![0u16; length as usize + 1];
+        let count = GetWindowTextW(self.text_input, buffer.as_mut_ptr(), buffer.len() as i32);
+        String::from_utf16(&buffer[..count as usize])
+            .map_err(|_| "粘贴的文字包含无效字符，请检查后重试".into())
+    }
     unsafe fn selected(&mut self, path: PathBuf) {
+        self.set_mode(InputMode::File);
         let output = path.with_extension("docx");
         self.input = Some(path);
         self.output = Some(output);
@@ -89,10 +117,62 @@ impl App {
         EnableWindow(self.convert, 1);
         EnableWindow(self.open, 0);
     }
+    unsafe fn set_mode(&mut self, mode: InputMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        let file = mode == InputMode::File;
+        for handle in [
+            self.input_name,
+            self.input_label,
+            self.file_hint,
+            self.select,
+        ] {
+            ShowWindow(handle, if file { SW_SHOW } else { SW_HIDE });
+        }
+        ShowWindow(self.text_input, if file { SW_HIDE } else { SW_SHOW });
+        if file {
+            self.output = self.input.as_ref().map(|p| p.with_extension("docx"));
+            if let Some(path) = &self.output {
+                SetWindowTextW(self.output_label, path_wide(path).as_ptr());
+            } else {
+                SetWindowTextW(
+                    self.output_label,
+                    wide("选择文件后，默认保存在源文件旁边").as_ptr(),
+                );
+            }
+            self.show_status("文件模式", "选择或拖入 Markdown 文件。", view::ACCENT);
+        } else {
+            self.output = None;
+            SetWindowTextW(self.output_label, wide("生成时选择 Word 保存位置").as_ptr());
+            self.show_status(
+                "文字模式",
+                "在上方粘贴 Markdown，点击生成即可保存 Word。",
+                view::ACCENT,
+            );
+            SetFocus(self.text_input);
+        }
+        EnableWindow(
+            self.convert,
+            (file && self.input.is_some() || !file && GetWindowTextLengthW(self.text_input) > 0)
+                as i32,
+        );
+        EnableWindow(self.open, 0);
+        InvalidateRect(self.file_tab, null(), 1);
+        InvalidateRect(self.text_tab, null(), 1);
+    }
     unsafe fn busy(&self, busy: bool) {
         EnableWindow(self.select, (!busy) as i32);
+        EnableWindow(self.file_tab, (!busy) as i32);
+        EnableWindow(self.text_tab, (!busy) as i32);
+        EnableWindow(self.text_input, (!busy) as i32);
         EnableWindow(self.save, (!busy) as i32);
-        EnableWindow(self.convert, (!busy && self.input.is_some()) as i32);
+        let has_input = match self.mode {
+            InputMode::File => self.input.is_some(),
+            InputMode::Text => GetWindowTextLengthW(self.text_input) > 0,
+        };
+        EnableWindow(self.convert, (!busy && has_input) as i32);
         SetWindowTextW(
             self.convert,
             wide(if busy {
@@ -174,11 +254,7 @@ unsafe fn dialog(hwnd: HWND, save: bool, default: Option<&std::path::Path>) -> O
     ofn.Flags = OFN_EXPLORER
         | OFN_PATHMUSTEXIST
         | OFN_NOCHANGEDIR
-        | if save {
-            OFN_OVERWRITEPROMPT
-        } else {
-            OFN_FILEMUSTEXIST
-        };
+        | if save { 0 } else { OFN_FILEMUSTEXIST };
     let success = if save {
         GetSaveFileNameW(&mut ofn)
     } else {
@@ -198,13 +274,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         match msg {
             WM_COMMAND => {
                 match w & 0xffff {
+                    FILE_TAB if app.worker.is_none() => app.set_mode(InputMode::File),
+                    TEXT_TAB if app.worker.is_none() => app.set_mode(InputMode::Text),
+                    TEXT_INPUT if (w >> 16) as u32 == EN_CHANGE && app.worker.is_none() => {
+                        if app.mode == InputMode::Text {
+                            EnableWindow(
+                                app.convert,
+                                (GetWindowTextLengthW(app.text_input) > 0) as i32,
+                            );
+                            EnableWindow(app.open, 0);
+                        }
+                    }
                     SELECT if app.worker.is_none() => {
                         if let Some(p) = dialog(hwnd, false, None) {
                             app.selected(p);
                         }
                     }
                     SAVE if app.worker.is_none() => {
-                        if let Some(p) = dialog(hwnd, true, app.output.as_deref()) {
+                        let default = app.output.as_deref().or_else(|| {
+                            (app.mode == InputMode::Text)
+                                .then_some(std::path::Path::new("未命名文档.docx"))
+                        });
+                        if let Some(p) = dialog(hwnd, true, default) {
                             app.output = Some(p);
                             EnableWindow(app.open, 0);
                             app.show_status(
@@ -219,37 +310,58 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                         }
                     }
                     CONVERT if app.worker.is_none() => {
-                        if let (Some(input), Some(output)) = (app.input.clone(), app.output.clone())
-                        {
-                            if output.exists() {
-                                let message =
-                                    format!("文件已存在：\n{}\n\n是否替换？", output.display());
-                                if MessageBoxW(
-                                    hwnd,
-                                    wide(&message).as_ptr(),
-                                    wide("保存 Word 文档").as_ptr(),
-                                    MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-                                ) != IDYES
-                                {
+                        let source = match app.mode {
+                            InputMode::File => match app.input.clone() {
+                                Some(path) => Source::File(path),
+                                None => return 0,
+                            },
+                            InputMode::Text => match app.pasted_text() {
+                                Ok(text) => Source::Text(text),
+                                Err(error) => {
+                                    app.show_status("请检查粘贴内容", &error, view::ERROR);
                                     return 0;
                                 }
+                            },
+                        };
+                        let output = match app.output.clone().or_else(|| {
+                            dialog(hwnd, true, Some(std::path::Path::new("未命名文档.docx")))
+                        }) {
+                            Some(path) => path,
+                            None => return 0,
+                        };
+                        app.output = Some(output.clone());
+                        SetWindowTextW(app.output_label, path_wide(&output).as_ptr());
+                        if output.exists() {
+                            let message =
+                                format!("文件已存在：\n{}\n\n是否替换？", output.display());
+                            if MessageBoxW(
+                                hwnd,
+                                wide(&message).as_ptr(),
+                                wide("保存 Word 文档").as_ptr(),
+                                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+                            ) != IDYES
+                            {
+                                return 0;
                             }
-                            let (tx, rx) = mpsc::channel();
-                            app.worker = Some(rx);
-                            app.busy(true);
-                            EnableWindow(app.open, 0);
-                            app.show_status(
-                                "正在生成 Word",
-                                "正在处理正文、公式和图片，请稍候。",
-                                view::ACCENT,
-                            );
-                            let handle = hwnd as isize;
-                            std::thread::spawn(move || {
-                                let result = convert::convert(&input, &output, true);
-                                let _ = tx.send(result);
-                                PostMessageW(handle as HWND, FINISHED, 0, 0);
-                            });
                         }
+                        let (tx, rx) = mpsc::channel();
+                        app.worker = Some(rx);
+                        app.busy(true);
+                        EnableWindow(app.open, 0);
+                        app.show_status(
+                            "正在生成 Word",
+                            "正在处理正文、公式和图片，请稍候。",
+                            view::ACCENT,
+                        );
+                        let handle = hwnd as isize;
+                        std::thread::spawn(move || {
+                            let result = match source {
+                                Source::File(input) => convert::convert(&input, &output, true),
+                                Source::Text(text) => convert::convert_text(&text, &output, true),
+                            };
+                            let _ = tx.send(result);
+                            PostMessageW(handle as HWND, FINISHED, 0, 0);
+                        });
                     }
                     OPEN => {
                         if let Some(path) = &app.output {
@@ -350,7 +462,7 @@ pub fn run(initial: Option<PathBuf>) {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
         let instance = GetModuleHandleW(null());
-        let class = wide("MoZhuanWordNativeV2");
+        let class = wide("MoZhuanWordNativeV3");
         let mut wc: WNDCLASSW = zeroed();
         wc.lpfnWndProc = Some(wndproc);
         wc.hInstance = instance;
@@ -378,7 +490,7 @@ pub fn run(initial: Option<PathBuf>) {
         let hwnd = CreateWindowExW(
             WS_EX_ACCEPTFILES,
             class.as_ptr(),
-            wide("墨转 Word · 0.2.1").as_ptr(),
+            wide("墨转 Word · v3").as_ptr(),
             style,
             work.left + (work.right - work.left - width) / 2,
             work.top + (work.bottom - work.top - height) / 2,
@@ -406,16 +518,27 @@ pub fn run(initial: Option<PathBuf>) {
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const App;
                 if !ptr.is_null() {
                     let app = &*ptr;
-                    let button = if [app.select, app.save, app.convert, app.open].contains(&focus) {
-                        focus
-                    } else {
-                        app.convert
-                    };
-                    if IsWindowEnabled(button) != 0 {
-                        SendMessageW(button, BM_CLICK, 0, 0);
+                    if focus != app.text_input {
+                        let button = if [
+                            app.select,
+                            app.save,
+                            app.convert,
+                            app.open,
+                            app.file_tab,
+                            app.text_tab,
+                        ]
+                        .contains(&focus)
+                        {
+                            focus
+                        } else {
+                            app.convert
+                        };
+                        if IsWindowEnabled(button) != 0 {
+                            SendMessageW(button, BM_CLICK, 0, 0);
+                        }
+                        continue;
                     }
                 }
-                continue;
             }
             if IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);

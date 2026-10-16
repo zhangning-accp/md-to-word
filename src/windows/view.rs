@@ -4,7 +4,7 @@ use super::*;
 use windows_sys::Win32::UI::Controls::{ODS_DISABLED, ODS_FOCUS, ODS_SELECTED};
 
 pub(super) const WIDTH: i32 = 760;
-pub(super) const HEIGHT: i32 = 660;
+pub(super) const HEIGHT: i32 = 800;
 const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
 }
@@ -86,7 +86,7 @@ pub(super) unsafe fn paint(hwnd: HWND, app: &App, dc: HDC) {
     GetClientRect(hwnd, &mut client);
     FillRect(dc, &client, app.background);
     // Soft edges and one-pixel outlines separate the file cards from the canvas.
-    for (y, h) in [(142, 150), (308, 112), (534, 96)] {
+    for (y, h) in [(142, 310), (468, 112), (688, 94)] {
         rounded(
             dc,
             rect(32, y + 2, 696, h, s),
@@ -122,7 +122,7 @@ pub(super) unsafe fn paint(hwnd: HWND, app: &App, dc: HDC) {
         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
     let color = app.status_color;
-    rounded(dc, rect(53, 553, 9, 9, s), color, color, (9.0 * s) as i32);
+    rounded(dc, rect(53, 707, 9, 9, s), color, color, (9.0 * s) as i32);
 }
 
 pub(super) unsafe fn control_color(app: &App, dc: HDC, handle: HWND) -> LRESULT {
@@ -133,6 +133,7 @@ pub(super) unsafe fn control_color(app: &App, dc: HDC, handle: HWND) -> LRESULT 
         app.status_color
     } else if matches!(id, SUBTITLE | FEATURES | VERSION)
         || handle == app.input_label
+        || handle == app.file_hint
         || handle == app.output_label
         || handle == app.status
     {
@@ -159,7 +160,7 @@ pub(super) unsafe fn draw_button(app: &App, item: &DRAWITEMSTRUCT) {
     FillRect(
         dc,
         &item.rcItem,
-        if matches!(id, SELECT | SAVE) {
+        if matches!(id, SELECT | SAVE | FILE_TAB | TEXT_TAB) {
             app.surface
         } else {
             app.background
@@ -171,6 +172,10 @@ pub(super) unsafe fn draw_button(app: &App, item: &DRAWITEMSTRUCT) {
         CONVERT if hot => (rgb(74, 105, 234), rgb(74, 105, 234), WHITE),
         CONVERT => (ACCENT, ACCENT, WHITE),
         _ if disabled => (rgb(241, 244, 249), rgb(230, 235, 243), rgb(161, 172, 189)),
+        FILE_TAB | TEXT_TAB if (id == FILE_TAB) == (app.mode == InputMode::File) => {
+            (TINT, ACCENT, ACCENT)
+        }
+        FILE_TAB | TEXT_TAB => (WHITE, EDGE, MUTED),
         SELECT => (
             if pressed {
                 rgb(222, 232, 255)
@@ -289,10 +294,10 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         SUBTITLE,
         small,
     );
-    c("STATIC", "0.2", SS_RIGHT, 654, 45, 66, 24, VERSION, small);
+    c("STATIC", "v3", SS_RIGHT, 654, 45, 66, 24, VERSION, small);
     c(
         "STATIC",
-        "Markdown 文件",
+        "输入 Markdown",
         0,
         94,
         159,
@@ -301,12 +306,34 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         INPUT_TITLE,
         heading,
     );
+    let file_tab = c(
+        "BUTTON",
+        "文件",
+        WS_TABSTOP | BS_OWNERDRAW as u32,
+        52,
+        199,
+        142,
+        36,
+        FILE_TAB,
+        regular,
+    );
+    let text_tab = c(
+        "BUTTON",
+        "粘贴文字",
+        WS_TABSTOP | BS_OWNERDRAW as u32,
+        206,
+        199,
+        142,
+        36,
+        TEXT_TAB,
+        regular,
+    );
     let input_name = c(
         "STATIC",
         "还没有选择文件",
         SS_ENDELLIPSIS,
         52,
-        199,
+        267,
         480,
         28,
         NAME,
@@ -317,7 +344,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "支持 .md、.markdown，或直接拖入文件",
         ES_READONLY as u32 | ES_AUTOHSCROLL as u32,
         52,
-        240,
+        312,
         480,
         25,
         0,
@@ -328,18 +355,47 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "选择文件",
         WS_TABSTOP | BS_OWNERDRAW as u32,
         551,
-        219,
+        290,
         153,
         42,
         SELECT,
         regular,
     );
+    let file_hint = c(
+        "STATIC",
+        "选择 .md / .markdown 文件，也可以直接拖入窗口。",
+        0,
+        52,
+        390,
+        620,
+        24,
+        0,
+        small,
+    );
+    let text_input = c(
+        "EDIT",
+        "",
+        WS_TABSTOP
+            | WS_BORDER
+            | WS_VSCROLL
+            | ES_MULTILINE as u32
+            | ES_AUTOVSCROLL as u32
+            | ES_WANTRETURN as u32,
+        52,
+        249,
+        652,
+        179,
+        TEXT_INPUT,
+        regular,
+    );
+    SendMessageW(text_input, EM_SETLIMITTEXT, 8 * 1024 * 1024, 0);
+    ShowWindow(text_input, SW_HIDE);
     c(
         "STATIC",
         "Word 保存位置",
         0,
         52,
-        327,
+        487,
         470,
         27,
         OUTPUT_TITLE,
@@ -350,7 +406,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "默认保存在源文件所在文件夹",
         ES_READONLY as u32 | ES_AUTOHSCROLL as u32,
         52,
-        369,
+        529,
         480,
         25,
         0,
@@ -361,7 +417,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "更改位置",
         WS_TABSTOP | BS_OWNERDRAW as u32,
         551,
-        357,
+        517,
         153,
         42,
         SAVE,
@@ -372,7 +428,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "保留换行     ·     可编辑公式     ·     本地处理",
         0,
         35,
-        437,
+        595,
         680,
         24,
         FEATURES,
@@ -383,7 +439,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "生成 Word 文档",
         WS_TABSTOP | BS_OWNERDRAW as u32,
         32,
-        476,
+        628,
         444,
         46,
         CONVERT,
@@ -394,7 +450,7 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
         "打开生成文件",
         WS_TABSTOP | BS_OWNERDRAW as u32,
         492,
-        476,
+        628,
         236,
         46,
         OPEN,
@@ -402,10 +458,10 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
     );
     let status_title = c(
         "STATIC",
-        "等待选择文件",
+        "等待输入内容",
         0,
         74,
-        546,
+        700,
         620,
         25,
         STATUS_TITLE,
@@ -413,30 +469,35 @@ pub(super) unsafe fn build(hwnd: HWND, scale: f64) -> App {
     );
     let status = c(
         "EDIT",
-        "选择一份 Markdown，即可开始转换。",
+        "选择 Markdown 文件，或切换到“粘贴文字”。",
         ES_READONLY as u32 | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | WS_VSCROLL,
         52,
-        581,
+        735,
         650,
-        38,
+        35,
         0,
         small,
     );
     ShowScrollBar(status, SB_VERT, 0);
     EnableWindow(convert, 0);
     EnableWindow(open, 0);
-    for button in [select, save, convert, open] {
+    for button in [select, save, convert, open, file_tab, text_tab] {
         SetWindowSubclass(button, Some(button_proc), 1, 0);
     }
     App {
+        mode: InputMode::File,
         input: None,
         output: None,
         input_label,
         input_name,
+        file_hint,
+        text_input,
         output_label,
         status_title,
         status,
         select,
+        file_tab,
+        text_tab,
         save,
         convert,
         open,
@@ -490,11 +551,14 @@ mod preview {
             );
             assert!(!hwnd.is_null());
             let mut app = Box::new(build(hwnd, 1.0));
-            app.selected(
-                std::env::current_dir()
-                    .unwrap()
-                    .join("examples/数学示例.md"),
+            app.set_mode(InputMode::Text);
+            SetWindowTextW(
+                app.text_input,
+                wide("# 数学练习\r\n请计算 $x^2+1$。\r\n\r\n- 第一题\r\n- 第二题").as_ptr(),
             );
+            app.busy(false);
+            assert!(app.pasted_text().unwrap().contains("请计算 $x^2+1$。"));
+            assert_ne!(IsWindowEnabled(app.convert), 0);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
             let mut info: BITMAPINFO = zeroed();
             info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
@@ -512,6 +576,10 @@ mod preview {
             paint(hwnd, app, dc);
             let mut child = GetWindow(hwnd, GW_CHILD);
             while !child.is_null() {
+                if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE == 0 {
+                    child = GetWindow(child, GW_HWNDNEXT);
+                    continue;
+                }
                 let mut bounds: RECT = zeroed();
                 GetWindowRect(child, &mut bounds);
                 MapWindowPoints(null_mut(), hwnd, (&mut bounds as *mut RECT).cast(), 2);
@@ -536,7 +604,7 @@ mod preview {
             GdiFlush();
             let data =
                 std::slice::from_raw_parts(pixels as *const u8, (WIDTH * HEIGHT * 4) as usize);
-            let mut file = std::fs::File::create("qa-output/interface-v0.2.bmp").unwrap();
+            let mut file = std::fs::File::create("qa-output/interface-v3.bmp").unwrap();
             file.write_all(b"BM").unwrap();
             file.write_all(&(54u32 + data.len() as u32).to_le_bytes())
                 .unwrap();
