@@ -356,7 +356,7 @@ pub fn run(initial: Option<PathBuf>) {
         wc.hInstance = instance;
         wc.lpszClassName = class.as_ptr();
         wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-        wc.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+        wc.hIcon = LoadIconW(instance, 1usize as *const u16);
         if RegisterClassW(&wc) == 0 {
             return;
         }
@@ -378,7 +378,7 @@ pub fn run(initial: Option<PathBuf>) {
         let hwnd = CreateWindowExW(
             WS_EX_ACCEPTFILES,
             class.as_ptr(),
-            wide("墨转 Word · 0.2").as_ptr(),
+            wide("墨转 Word · 0.2.1").as_ptr(),
             style,
             work.left + (work.right - work.left - width) / 2,
             work.top + (work.bottom - work.top - height) / 2,

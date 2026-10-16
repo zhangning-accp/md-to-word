@@ -2,13 +2,13 @@
 
 用 Rust 编写的轻量桌面工具，将 Markdown 转为 `.docx`，重点支持数学教学文档中的可编辑公式。Windows 使用 Win32 原生控件，macOS 使用 AppKit 原生控件。
 
-0.2 版使用新的卡片界面。正文中的每一次手动换行都会保留到 Word 中；空行仍分段，无需在行尾添加两个空格。Windows 新版程序为 `md-to-word-0.2.0.exe`。
+0.2.1 版换上专用应用图标。正文中的每一次手动换行都会保留到 Word 中；空行仍分段，无需在行尾添加两个空格。本仓库只保存源码和示例，不在提交后自动打包或发布可执行文件。
 
 ## 直接使用
 
-Windows：从 [v0.2.0 发布页](https://github.com/zhangning-accp/md-to-word/releases/tag/v0.2.0) 下载 Windows 压缩包，解压后双击 `md-to-word.exe`。选择 Markdown 文件，确认保存位置，点击“转换为 Word”。也可以把一个 Markdown 文件拖进窗口。完成后点击“打开 Word 文件”。
+Windows：在本机双击 `dist/墨转 Word.exe`。选择 Markdown 文件，确认保存位置，点击“转换为 Word”。也可以把一个 Markdown 文件拖进窗口。完成后点击“打开 Word 文件”。克隆本仓库的用户可按下文从源码自行构建。
 
-macOS：从同一[发布页](https://github.com/zhangning-accp/md-to-word/releases/tag/v0.2.0)下载 Apple 芯片或 Intel 芯片对应的压缩包，解压后双击 `墨转 Word.app`。也可以在 Mac 上使用下方脚本自行生成。Apple 芯片要求 macOS 11.0 或更新，Intel 芯片要求 macOS 10.14 或更新。
+macOS：需要时在 Mac 上自行构建；源码保留 AppKit 界面和可选的本地 `.app` 打包脚本。Apple 芯片要求 macOS 11.0 或更新，Intel 芯片要求 macOS 10.14 或更新。
 
 转换器不需要安装 Word、Pandoc、Python、Node.js 或浏览器运行环境。查看或编辑生成的文件需要兼容 `.docx` 的软件。
 
@@ -62,7 +62,7 @@ rustup target add x86_64-apple-darwin
 sh scripts/package-macos.sh x86_64-apple-darwin
 ```
 
-输出在 `dist/`。GitHub Actions 工作流只在手动启动时运行，默认构建两种 Mac 版本；选择 `all` 时也构建 Windows 版本。每个 Mac 作业会在对应架构的 Mac 机器上运行测试、打包应用，并用打包后的程序转换示例文件。Actions 中的临时构建产物保留 7 天，正式下载包放在发布页。
+打包脚本只在个人 Mac 上手动运行时生成文件。GitHub 仓库没有自动打包工作流，也不上传 Windows 或 Mac 的执行程序。本机 Windows 图标资源可用 `python scripts/generate-icon.py` 重新生成；只有重新制作图标时才需要 Pillow，使用程序不需要 Python。
 
 脚本使用本地临时签名，没有 Apple Developer ID 签名与公证；在普通 Mac 上首次打开时可能出现系统安全提示。当前尚未在 Mac 桌面上手动验证窗口操作；正式对外分发前仍需完成桌面实测与 Apple 签名公证。
 
@@ -89,4 +89,4 @@ Windows 性能测试：
 - `tests/conversion.rs`：完整文件、公式回退、列表、图片、覆盖保护等测试。
 - `examples/数学示例.md`：可用于核对常见排版和公式的示例。
 
-项目代码采用 MIT 许可证。第三方依赖各自的许可信息见随分发包附带的 `THIRD_PARTY_LICENSES.txt`。
+项目代码采用 MIT 许可证。第三方依赖各自的许可信息见 `THIRD_PARTY_LICENSES.txt`。
